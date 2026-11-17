@@ -1,17 +1,20 @@
-// A working token-radar-01 entry (Node 22, standard library only).
+// Token Radar, program entrypoint (Node 22, standard library only).
 //
-// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the model in lib/model.ts, writes the ranked board to /output/board.json, and
-// copies this repository's dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json,
-// the summary the judge reads, with the vendored make.fun library.
+// Reads the sealed snapshot, scores every pre-token protocol with the radar-2
+// model in lib/model.ts, and writes the graded output:
 //
-// The dashboard is a static page, no framework and no network: dashboard/index.html, dashboard/app.css
-// and dashboard/app.js read /output/data.js, which this program writes from the same board. A starting
-// point, not a winner: it covers the watchlist, states the model and gives every protocol a farm plan.
-// Change the model, the page or the plan; keep the gate's shape.
+//   /output/board.json    the ranked board (rows 1..N by implied value)
+//   /output/data.js       the same board, compact, for the dashboard page
+//   /output/dashboard/   a copy of this repo's dashboard/
+//   /output/screenshots/ a copy of this repo's screenshots/
+//   /output/dossier.json the judge's dossier, built last by the vendored library
 //
-// Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
+// The snapshot comes from /input/snapshot.json in the grader, or from --input
+// <snapshot.json|directory> when run by hand. Outside the grader, the output
+// directory is MAKEFUN_OUTPUT_DIR (or --output):
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
+// The program refuses to write a board the gate would refuse, and refuses to
+// run when the screenshots are missing.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,26 +24,26 @@ import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
-/** The scorer's own caps (reference/gate.json): the text cap shapes the bytes, the rest refuse. */
+/** The scorer's own caps: the text cap shapes the dossier, the rest refuse. */
 const TEXT_MAX_BYTES = 65_536;
 const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
 const IMAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
-/** --name <value> out of the arguments, or the fallback. */
-function arg(name: string, fallback: string): string {
+/** The value of --name <value>, or `fallback` when the flag is absent. */
+function flag(name: string, fallback: string): string {
   const at = process.argv.indexOf(`--${name}`);
   if (at >= 0 && at + 1 < process.argv.length) return process.argv[at + 1]!;
-  const withEquals = process.argv.find((a) => a.startsWith(`--${name}=`));
-  return withEquals === undefined ? fallback : withEquals.slice(name.length + 3);
+  const joined = process.argv.find((a) => a.startsWith(`--${name}=`));
+  return joined === undefined ? fallback : joined.slice(name.length + 3);
 }
 
-const inputArg = arg('input', '/input');
+const inputArg = flag('input', '/input');
 const inputFile = inputArg.endsWith('.json') ? inputArg : join(inputArg, 'snapshot.json');
 if (!existsSync(inputFile)) {
   process.stderr.write(`token radar: no snapshot at ${inputFile}: pass --input <snapshot.json|directory> or mount the sealed /input\n`);
   process.exit(2);
 }
-const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
+const out = flag('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 const { board, radar } = buildRadar(snapshot);
@@ -54,8 +57,8 @@ mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
 writeFileSync(join(out, 'data.js'), dataScript(radar));
 
-/** Copy one directory's regular files into `to`, skipping names that start with a dot. */
-function copyFiles(from: string, to: string): string[] {
+/** Copy a directory's regular files into `to`, skipping dot-names. */
+function copyDir(from: string, to: string): string[] {
   if (!existsSync(from)) return [];
   mkdirSync(to, { recursive: true });
   const copied: string[] = [];
@@ -69,8 +72,8 @@ function copyFiles(from: string, to: string): string[] {
   return copied;
 }
 
-copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
-const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
+copyDir(join(here, 'dashboard'), join(out, 'dashboard'));
+const shots = copyDir(join(here, 'screenshots'), join(out, 'screenshots'));
 if (shots.length < 3) {
   process.stderr.write(`token radar: screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view\n`);
   process.exit(1);
